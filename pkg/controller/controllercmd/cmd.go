@@ -55,6 +55,9 @@ type ControllerCommandConfig struct {
 	// DisableLeaderElection allows leader election to be suspended
 	DisableLeaderElection bool
 
+	// LeaseName is the lease name to be used for leader election.
+	LeaseName string
+
 	// LeaseDuration is the duration that non-leader candidates will
 	// wait to force acquire leadership. This is measured against time of
 	// last observed ack.
@@ -292,21 +295,48 @@ func (c *ControllerCommandConfig) AddDefaultRotationToConfig(config *operatorv1a
 	return startingFileContent, observedFiles, nil
 }
 
-// StartController runs the controller. This is the recommend entrypoint when you don't need
-// to customize the builder.
-func (c *ControllerCommandConfig) StartController(ctx context.Context) error {
+// controllerConfig loads configuration much like Config(),
+// but it also updates the loaded GenericOperatorConfig based on the command config.
+//
+// It's a helper function that can be tested separately.
+func (c *ControllerCommandConfig) controllerConfig() (
+	*unstructured.Unstructured,
+	*operatorv1alpha1.GenericOperatorConfig,
+	map[string][]byte,
+	[]string,
+	error,
+) {
 	unstructuredConfig, config, configContent, err := c.Config()
 	if err != nil {
-		return err
+		return nil, nil, nil, nil, err
 	}
 
 	startingFileContent, observedFiles, err := c.AddDefaultRotationToConfig(config, configContent)
 	if err != nil {
-		return err
+		return nil, nil, nil, nil, err
 	}
 
 	if len(c.basicFlags.BindAddress) != 0 {
 		config.ServingInfo.BindAddress = c.basicFlags.BindAddress
+	}
+
+	config.LeaderElection.Disable = c.DisableLeaderElection
+	if c.LeaseName != "" {
+		config.LeaderElection.Name = c.LeaseName
+	}
+	config.LeaderElection.LeaseDuration = c.LeaseDuration
+	config.LeaderElection.RenewDeadline = c.RenewDeadline
+	config.LeaderElection.RetryPeriod = c.RetryPeriod
+
+	return unstructuredConfig, config, startingFileContent, observedFiles, nil
+}
+
+// StartController runs the controller. This is the recommend entrypoint when you don't need
+// to customize the builder.
+func (c *ControllerCommandConfig) StartController(ctx context.Context) error {
+	unstructuredConfig, config, startingFileContent, observedFiles, err := c.controllerConfig()
+	if err != nil {
+		return err
 	}
 
 	exitOnChangeReactorCh := make(chan struct{})
@@ -319,11 +349,6 @@ func (c *ControllerCommandConfig) StartController(ctx context.Context) error {
 			cancel()
 		}
 	}()
-
-	config.LeaderElection.Disable = c.DisableLeaderElection
-	config.LeaderElection.LeaseDuration = c.LeaseDuration
-	config.LeaderElection.RenewDeadline = c.RenewDeadline
-	config.LeaderElection.RetryPeriod = c.RetryPeriod
 
 	builder := NewController(c.componentName, c.startFunc, c.clock).
 		WithKubeConfigFile(c.basicFlags.KubeConfigFile, nil).

@@ -1,0 +1,5 @@
+apiVersion: operator.openshift.io/v1alpha1
+kind: GenericOperatorConfig
+leaderElection:
+  name: 'operator1'
+  namespace: 'operator-ns'
