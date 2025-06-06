@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/distribution/distribution/v3/registry/client"
 	"github.com/distribution/distribution/v3/registry/client/auth/challenge"
 	"github.com/distribution/distribution/v3/registry/client/transport"
+	"github.com/openshift/library-go/internal/distribution/v3/registry/client"
 
 	"github.com/openshift/library-go/pkg/image/registryclient/auth"
 )
