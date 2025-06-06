@@ -82,7 +82,7 @@ type Context struct {
 	Transport          http.RoundTripper
 	InsecureTransport  http.RoundTripper
 	Challenges         challenge.Manager
-	Scopes             []auth.Scope
+	Scopes             []regauth.Scope
 	Actions            []string
 	Retries            int
 	Credentials        regauth.CredentialStore
@@ -134,7 +134,7 @@ func (c *Context) WithRateLimiter(limiter *rate.Limiter) *Context {
 	return c
 }
 
-func (c *Context) WithScopes(scopes ...auth.Scope) *Context {
+func (c *Context) WithScopes(scopes ...regauth.Scope) *Context {
 	c.Scopes = scopes
 	return c
 }
@@ -368,7 +368,7 @@ func (s stringScope) String() string { return string(s) }
 // cachedTransport reuses an underlying transport for the given round tripper based
 // on the set of passed scopes. It will always return a transport that has at least the
 // provided scope list.
-func (c *Context) cachedTransport(rt http.RoundTripper, host string, scopes []auth.Scope, ref imagereference.DockerImageReference) http.RoundTripper {
+func (c *Context) cachedTransport(rt http.RoundTripper, host string, scopes []regauth.Scope, ref imagereference.DockerImageReference) http.RoundTripper {
 	scopeNames := make(map[string]struct{})
 	for _, scope := range scopes {
 		scopeNames[scope.String()] = struct{}{}
@@ -388,9 +388,9 @@ func (c *Context) cachedTransport(rt http.RoundTripper, host string, scopes []au
 		names = append(names, s)
 	}
 	sort.Strings(names)
-	scopes = make([]auth.Scope, 0, len(scopeNames))
+	authScopes := make([]auth.Scope, 0, len(scopeNames))
 	for _, s := range names {
-		scopes = append(scopes, stringScope(s))
+		authScopes = append(authScopes, stringScope(s))
 	}
 
 	creds := c.Credentials
@@ -406,7 +406,7 @@ func (c *Context) cachedTransport(rt http.RoundTripper, host string, scopes []au
 			auth.NewTokenHandlerWithOptions(auth.TokenHandlerOptions{
 				Transport:   rt,
 				Credentials: creds,
-				Scopes:      scopes,
+				Scopes:      authScopes,
 			}),
 			auth.NewBasicHandler(creds),
 		),
@@ -422,8 +422,8 @@ func (c *Context) cachedTransport(rt http.RoundTripper, host string, scopes []au
 	return t
 }
 
-func (c *Context) scopes(repoName string) []auth.Scope {
-	scopes := make([]auth.Scope, 0, 1+len(c.Scopes))
+func (c *Context) scopes(repoName string) []regauth.Scope {
+	scopes := make([]regauth.Scope, 0, 1+len(c.Scopes))
 	scopes = append(scopes, c.Scopes...)
 	if len(c.Actions) == 0 {
 		scopes = append(scopes, auth.RepositoryScope{Repository: repoName, Actions: []string{"pull"}})
