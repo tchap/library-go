@@ -141,5 +141,3 @@ require (
 )
 
 replace github.com/distribution/distribution/v3/registry/client => ./internal/distribution/v3/registry/client
-
-replace github.com/distribution/distribution/v3/manifest/schema1 => ./internal/distribution/v3/manifest/schema1

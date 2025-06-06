@@ -14,6 +14,8 @@ import (
 	"github.com/distribution/distribution/v3/registry/client"
 	"github.com/distribution/distribution/v3/registry/client/auth/challenge"
 	"github.com/distribution/distribution/v3/registry/client/transport"
+
+	"github.com/openshift/library-go/pkg/image/registryclient/auth"
 )
 
 var (
@@ -38,21 +40,6 @@ type AuthenticationHandler interface {
 	// using the parameters from "WWW-Authenticate" method. The parameters
 	// values depend on the scheme.
 	AuthorizeRequest(req *http.Request, params map[string]string) error
-}
-
-// CredentialStore is an interface for getting credentials for
-// a given URL
-type CredentialStore interface {
-	// Basic returns basic auth for the given URL
-	Basic(*url.URL) (string, string)
-
-	// RefreshToken returns a refresh token for the
-	// given URL and service
-	RefreshToken(*url.URL, string) string
-
-	// SetRefreshToken sets the refresh token if none
-	// is provided for the given url and service
-	SetRefreshToken(realm *url.URL, service, token string)
 }
 
 // NewAuthorizer creates an authorizer which can handle multiple authentication
@@ -121,7 +108,7 @@ type clock interface {
 }
 
 type tokenHandler struct {
-	creds     CredentialStore
+	creds     auth.CredentialStore
 	transport http.RoundTripper
 	clock     clock
 
@@ -191,7 +178,7 @@ func logDebugf(logger Logger, format string, args ...interface{}) {
 // TokenHandlerOptions is used to configure a new token handler
 type TokenHandlerOptions struct {
 	Transport   http.RoundTripper
-	Credentials CredentialStore
+	Credentials auth.CredentialStore
 
 	OfflineAccess bool
 	ForceOAuth    bool
@@ -208,7 +195,7 @@ func (realClock) Now() time.Time { return time.Now() }
 
 // NewTokenHandler creates a new AuthenicationHandler which supports
 // fetching tokens from a remote token server.
-func NewTokenHandler(transport http.RoundTripper, creds CredentialStore, scope string, actions ...string) AuthenticationHandler {
+func NewTokenHandler(transport http.RoundTripper, creds auth.CredentialStore, scope string, actions ...string) AuthenticationHandler {
 	// Create options...
 	return NewTokenHandlerWithOptions(TokenHandlerOptions{
 		Transport:   transport,
@@ -512,12 +499,12 @@ func (th *tokenHandler) fetchToken(ctx context.Context, params map[string]string
 }
 
 type basicHandler struct {
-	creds CredentialStore
+	creds auth.CredentialStore
 }
 
 // NewBasicHandler creaters a new authentiation handler which adds
 // basic authentication credentials to a request.
-func NewBasicHandler(creds CredentialStore) AuthenticationHandler {
+func NewBasicHandler(creds auth.CredentialStore) AuthenticationHandler {
 	return &basicHandler{
 		creds: creds,
 	}

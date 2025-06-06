@@ -18,7 +18,6 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/distribution/distribution/v3"
-	"github.com/distribution/distribution/v3/manifest/schema1"
 	"github.com/distribution/distribution/v3/registry/api/errcode"
 	registryclient "github.com/distribution/distribution/v3/registry/client"
 	"github.com/distribution/distribution/v3/registry/client/auth"
@@ -26,6 +25,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/client/transport"
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
+	regauth "github.com/openshift/library-go/pkg/image/registryclient/auth"
 
 	imagereference "github.com/openshift/library-go/pkg/image/reference"
 )
@@ -33,7 +33,7 @@ import (
 // CredentialStoreFactory is any entity capable of creating a CredentialStore based on an image
 // path (such as quay.io/fedora/fedora).
 type CredentialStoreFactory interface {
-	CredentialStoreFor(image string) auth.CredentialStore
+	CredentialStoreFor(image string) regauth.CredentialStore
 }
 
 // RepositoryRetriever fetches a Docker distribution.Repository.
@@ -85,7 +85,7 @@ type Context struct {
 	Scopes             []auth.Scope
 	Actions            []string
 	Retries            int
-	Credentials        auth.CredentialStore
+	Credentials        regauth.CredentialStore
 	CredentialsFactory CredentialStoreFactory
 	RequestModifiers   []transport.RequestModifier
 	Limiter            *rate.Limiter
@@ -144,7 +144,7 @@ func (c *Context) WithActions(actions ...string) *Context {
 	return c
 }
 
-func (c *Context) WithCredentials(credentials auth.CredentialStore) *Context {
+func (c *Context) WithCredentials(credentials regauth.CredentialStore) *Context {
 	c.Credentials = credentials
 	return c
 }
@@ -331,7 +331,7 @@ func (c *Context) ping(registry url.URL, insecure bool, transport http.RoundTrip
 	}
 	defer resp.Body.Close()
 
-	versions := auth.APIVersions(resp, "Docker-Distribution-API-Version")
+	versions := regauth.APIVersions(resp, "Docker-Distribution-API-Version")
 	if len(versions) == 0 {
 		klog.V(5).Infof("Registry responded to v2 Docker endpoint, but has no header for Docker Distribution %s: %d, %#v", req.URL, resp.StatusCode, resp.Header)
 		switch {
@@ -723,20 +723,11 @@ func VerifyManifestIntegrity(manifest distribution.Manifest, dgst digest.Digest)
 
 // ContentDigestForManifest returns the digest in the provided algorithm of the supplied manifest's contents.
 func ContentDigestForManifest(manifest distribution.Manifest, algo digest.Algorithm) (digest.Digest, error) {
-	switch t := manifest.(type) {
-	case *schema1.SignedManifest:
-		// schema1 manifest digests are calculated from the payload
-		if len(t.Canonical) == 0 {
-			return "", fmt.Errorf("the schema1 manifest does not have a canonical representation")
-		}
-		return algo.FromBytes(t.Canonical), nil
-	default:
-		_, payload, err := manifest.Payload()
-		if err != nil {
-			return "", err
-		}
-		return algo.FromBytes(payload), nil
+	_, payload, err := manifest.Payload()
+	if err != nil {
+		return "", err
 	}
+	return algo.FromBytes(payload), nil
 }
 
 // blobStoreVerifier wraps the blobs service and ensures that content retrieved by digest matches that digest.
