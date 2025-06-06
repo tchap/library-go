@@ -22,12 +22,12 @@ import (
 	registryclient "github.com/distribution/distribution/v3/registry/client"
 	"github.com/distribution/distribution/v3/registry/client/auth"
 	"github.com/distribution/distribution/v3/registry/client/auth/challenge"
-	"github.com/distribution/distribution/v3/registry/client/transport"
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
-	regauth "github.com/openshift/library-go/pkg/image/registryclient/auth"
 
 	imagereference "github.com/openshift/library-go/pkg/image/reference"
+	regauth "github.com/openshift/library-go/pkg/image/registryclient/auth"
+	"github.com/openshift/library-go/pkg/image/registryclient/transport"
 )
 
 // CredentialStoreFactory is any entity capable of creating a CredentialStore based on an image
