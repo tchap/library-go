@@ -13,20 +13,19 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/time/rate"
-
-	"k8s.io/klog/v2"
-
 	"github.com/distribution/distribution/v3"
 	"github.com/distribution/distribution/v3/registry/api/errcode"
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
+	"golang.org/x/time/rate"
+	"k8s.io/klog/v2"
 
 	registryclient "github.com/openshift/library-go/internal/distribution/v3/registry/client"
 	"github.com/openshift/library-go/internal/distribution/v3/registry/client/auth"
 	"github.com/openshift/library-go/internal/distribution/v3/registry/client/auth/challenge"
 	imagereference "github.com/openshift/library-go/pkg/image/reference"
 	regauth "github.com/openshift/library-go/pkg/image/registryclient/auth"
+	"github.com/openshift/library-go/pkg/image/registryclient/clienterrors"
 	"github.com/openshift/library-go/pkg/image/registryclient/transport"
 )
 
@@ -482,7 +481,7 @@ func isTemporaryHTTPError(err error) (time.Duration, bool) {
 		case errcode.ErrorCodeTooManyRequests:
 			return 2 * time.Second, true
 		}
-	case *registryclient.UnexpectedHTTPResponseError:
+	case *clienterrors.UnexpectedHTTPResponseError:
 		switch t.StatusCode {
 		case http.StatusInternalServerError, http.StatusGatewayTimeout, http.StatusServiceUnavailable, http.StatusBadGateway:
 			return 5 * time.Second, true

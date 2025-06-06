@@ -12,12 +12,12 @@ import (
 	"github.com/distribution/distribution/v3"
 	"github.com/distribution/distribution/v3/registry/api/errcode"
 	"github.com/opencontainers/go-digest"
-	"github.com/openshift/library-go/internal/distribution/v3/registry/client"
-	"github.com/openshift/library-go/internal/distribution/v3/registry/client/auth"
-	"github.com/openshift/library-go/pkg/image/reference"
 	"k8s.io/klog/v2"
 
 	distributionreference "github.com/distribution/reference"
+	"github.com/openshift/library-go/internal/distribution/v3/registry/client/auth"
+	"github.com/openshift/library-go/pkg/image/reference"
+	"github.com/openshift/library-go/pkg/image/registryclient/clienterrors"
 )
 
 // AlternateBlobSourceStrategy is consulted when a repository cannot be reached to find alternate
@@ -196,8 +196,8 @@ func (r *blobMirroredRepository) attemptRepos(ctx context.Context, repos []refer
 // nothing was copied.
 func isRequestError(err error) bool {
 	var errorCode errcode.ErrorCode
-	responseError := &client.UnexpectedHTTPResponseError{}
-	statusError := &client.UnexpectedHTTPStatusError{}
+	responseError := &clienterrors.UnexpectedHTTPResponseError{}
+	statusError := &clienterrors.UnexpectedHTTPStatusError{}
 	return errors.As(err, &errcode.Errors{}) ||
 		errors.As(err, &errcode.Error{}) ||
 		errors.As(err, &errorCode) ||
