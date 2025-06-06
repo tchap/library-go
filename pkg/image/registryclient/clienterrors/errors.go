@@ -1,4 +1,4 @@
-package registryclient
+package clienterrors
 
 import (
 	"encoding/json"
@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/distribution/distribution/v3/registry/api/errcode"
+
 	"github.com/openshift/library-go/internal/distribution/v3/registry/client/auth/challenge"
 )
 

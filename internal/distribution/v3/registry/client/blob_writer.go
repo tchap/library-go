@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/distribution/distribution/v3"
+
+	"github.com/openshift/library-go/pkg/image/registryclient/clienterrors"
 )
 
 type httpBlobUpload struct {
@@ -33,7 +35,7 @@ func (hbu *httpBlobUpload) handleErrorResponse(resp *http.Response) error {
 	if resp.StatusCode == http.StatusNotFound {
 		return distribution.ErrBlobUploadUnknown
 	}
-	return HandleErrorResponse(resp)
+	return clienterrors.HandleErrorResponse(resp)
 }
 
 func (hbu *httpBlobUpload) ReadFrom(r io.Reader) (n int64, err error) {
@@ -48,7 +50,7 @@ func (hbu *httpBlobUpload) ReadFrom(r io.Reader) (n int64, err error) {
 		return 0, err
 	}
 
-	if !SuccessStatus(resp.StatusCode) {
+	if !clienterrors.SuccessStatus(resp.StatusCode) {
 		return 0, hbu.handleErrorResponse(resp)
 	}
 
@@ -83,7 +85,7 @@ func (hbu *httpBlobUpload) Write(p []byte) (n int, err error) {
 		return 0, err
 	}
 
-	if !SuccessStatus(resp.StatusCode) {
+	if !clienterrors.SuccessStatus(resp.StatusCode) {
 		return 0, hbu.handleErrorResponse(resp)
 	}
 
@@ -133,7 +135,7 @@ func (hbu *httpBlobUpload) Commit(ctx context.Context, desc distribution.Descrip
 	}
 	defer resp.Body.Close()
 
-	if !SuccessStatus(resp.StatusCode) {
+	if !clienterrors.SuccessStatus(resp.StatusCode) {
 		return distribution.Descriptor{}, hbu.handleErrorResponse(resp)
 	}
 
@@ -151,7 +153,7 @@ func (hbu *httpBlobUpload) Cancel(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound || SuccessStatus(resp.StatusCode) {
+	if resp.StatusCode == http.StatusNotFound || clienterrors.SuccessStatus(resp.StatusCode) {
 		return nil
 	}
 	return hbu.handleErrorResponse(resp)

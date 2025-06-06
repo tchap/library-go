@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openshift/library-go/internal/distribution/v3/registry/client"
 	"github.com/openshift/library-go/internal/distribution/v3/registry/client/auth/challenge"
 	"github.com/openshift/library-go/pkg/image/registryclient/auth"
+	"github.com/openshift/library-go/pkg/image/registryclient/clienterrors"
 	"github.com/openshift/library-go/pkg/image/registryclient/transport"
 )
 
@@ -346,8 +346,8 @@ func (th *tokenHandler) fetchTokenWithOAuth(ctx context.Context, realm *url.URL,
 	}
 	defer resp.Body.Close()
 
-	if !client.SuccessStatus(resp.StatusCode) {
-		err := client.HandleErrorResponse(resp)
+	if !clienterrors.SuccessStatus(resp.StatusCode) {
+		err := clienterrors.HandleErrorResponse(resp)
 		return "", time.Time{}, err
 	}
 
@@ -429,8 +429,8 @@ func (th *tokenHandler) fetchTokenWithBasicAuth(ctx context.Context, realm *url.
 	}
 	defer resp.Body.Close()
 
-	if !client.SuccessStatus(resp.StatusCode) {
-		err := client.HandleErrorResponse(resp)
+	if !clienterrors.SuccessStatus(resp.StatusCode) {
+		err := clienterrors.HandleErrorResponse(resp)
 		return "", time.Time{}, err
 	}
 

@@ -20,6 +20,8 @@ import (
 	"github.com/distribution/distribution/v3/registry/storage/cache/memory"
 	"github.com/distribution/reference"
 	"github.com/opencontainers/go-digest"
+
+	"github.com/openshift/library-go/pkg/image/registryclient/clienterrors"
 	"github.com/openshift/library-go/pkg/image/registryclient/transport"
 )
 
@@ -108,7 +110,7 @@ func (r *registry) Repositories(ctx context.Context, entries []string, last stri
 	}
 	defer resp.Body.Close()
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		var ctlg struct {
 			Repositories []string `json:"repositories"`
 		}
@@ -126,7 +128,7 @@ func (r *registry) Repositories(ctx context.Context, entries []string, last stri
 			returnErr = io.EOF
 		}
 	} else {
-		return 0, HandleErrorResponse(resp)
+		return 0, clienterrors.HandleErrorResponse(resp)
 	}
 
 	return numFilled, returnErr
@@ -223,7 +225,7 @@ func (t *tags) All(ctx context.Context) ([]string, error) {
 		}
 		defer resp.Body.Close()
 
-		if SuccessStatus(resp.StatusCode) {
+		if clienterrors.SuccessStatus(resp.StatusCode) {
 			b, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return tags, err
@@ -248,7 +250,7 @@ func (t *tags) All(ctx context.Context) ([]string, error) {
 				return tags, nil
 			}
 		} else {
-			return tags, HandleErrorResponse(resp)
+			return tags, clienterrors.HandleErrorResponse(resp)
 		}
 	}
 }
@@ -345,7 +347,7 @@ func (t *tags) Get(ctx context.Context, tag string) (distribution.Descriptor, er
 		if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 			return descriptorFromResponse(resp)
 		}
-		return distribution.Descriptor{}, HandleErrorResponse(resp)
+		return distribution.Descriptor{}, clienterrors.HandleErrorResponse(resp)
 	}
 }
 
@@ -378,10 +380,10 @@ func (t *tags) Untag(ctx context.Context, tag string) error {
 	}
 	defer resp.Body.Close()
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		return nil
 	}
-	return HandleErrorResponse(resp)
+	return clienterrors.HandleErrorResponse(resp)
 }
 
 type manifests struct {
@@ -410,12 +412,12 @@ func (ms *manifests) Exists(ctx context.Context, dgst digest.Digest) (bool, erro
 		return false, err
 	}
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		return true, nil
 	} else if resp.StatusCode == http.StatusNotFound {
 		return false, nil
 	}
-	return false, HandleErrorResponse(resp)
+	return false, clienterrors.HandleErrorResponse(resp)
 }
 
 // AddEtagToTag allows a client to supply an eTag to Get which will be
@@ -516,7 +518,7 @@ func (ms *manifests) Get(ctx context.Context, dgst digest.Digest, options ...dis
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
 		return nil, distribution.ErrManifestNotModified
-	} else if SuccessStatus(resp.StatusCode) {
+	} else if clienterrors.SuccessStatus(resp.StatusCode) {
 		if contentDgst != nil {
 			dgst, err := digest.Parse(resp.Header.Get("Docker-Content-Digest"))
 			if err == nil {
@@ -534,7 +536,7 @@ func (ms *manifests) Get(ctx context.Context, dgst digest.Digest, options ...dis
 		}
 		return m, nil
 	}
-	return nil, HandleErrorResponse(resp)
+	return nil, clienterrors.HandleErrorResponse(resp)
 }
 
 // Put puts a manifest.  A tag can be specified using an options parameter which uses some shared state to hold the
@@ -593,7 +595,7 @@ func (ms *manifests) Put(ctx context.Context, m distribution.Manifest, options .
 	}
 	defer resp.Body.Close()
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		dgstHeader := resp.Header.Get("Docker-Content-Digest")
 		dgst, err := digest.Parse(dgstHeader)
 		if err != nil {
@@ -603,7 +605,7 @@ func (ms *manifests) Put(ctx context.Context, m distribution.Manifest, options .
 		return dgst, nil
 	}
 
-	return "", HandleErrorResponse(resp)
+	return "", clienterrors.HandleErrorResponse(resp)
 }
 
 func (ms *manifests) Delete(ctx context.Context, dgst digest.Digest) error {
@@ -626,10 +628,10 @@ func (ms *manifests) Delete(ctx context.Context, dgst digest.Digest) error {
 	}
 	defer resp.Body.Close()
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		return nil
 	}
-	return HandleErrorResponse(resp)
+	return clienterrors.HandleErrorResponse(resp)
 }
 
 // todo(richardscothern): Restore interface and implementation with merge of #1050
@@ -688,7 +690,7 @@ func (bs *blobs) Open(ctx context.Context, dgst digest.Digest) (io.ReadSeekClose
 		if resp.StatusCode == http.StatusNotFound {
 			return distribution.ErrBlobUnknown
 		}
-		return HandleErrorResponse(resp)
+		return clienterrors.HandleErrorResponse(resp)
 	}), nil
 }
 
@@ -826,7 +828,7 @@ func (bs *blobs) Create(ctx context.Context, options ...distribution.BlobCreateO
 			location:  location,
 		}, nil
 	default:
-		return nil, HandleErrorResponse(resp)
+		return nil, clienterrors.HandleErrorResponse(resp)
 	}
 }
 
@@ -876,7 +878,7 @@ func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distributi
 	}
 	defer resp.Body.Close()
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		lengthHeader := resp.Header.Get("Content-Length")
 		if lengthHeader == "" {
 			return distribution.Descriptor{}, fmt.Errorf("missing content-length header for request: %s", u)
@@ -895,7 +897,7 @@ func (bs *blobStatter) Stat(ctx context.Context, dgst digest.Digest) (distributi
 	} else if resp.StatusCode == http.StatusNotFound {
 		return distribution.Descriptor{}, distribution.ErrBlobUnknown
 	}
-	return distribution.Descriptor{}, HandleErrorResponse(resp)
+	return distribution.Descriptor{}, clienterrors.HandleErrorResponse(resp)
 }
 
 func buildCatalogValues(maxEntries int, last string) url.Values {
@@ -933,10 +935,10 @@ func (bs *blobStatter) Clear(ctx context.Context, dgst digest.Digest) error {
 	}
 	defer resp.Body.Close()
 
-	if SuccessStatus(resp.StatusCode) {
+	if clienterrors.SuccessStatus(resp.StatusCode) {
 		return nil
 	}
-	return HandleErrorResponse(resp)
+	return clienterrors.HandleErrorResponse(resp)
 }
 
 func (bs *blobStatter) SetDescriptor(ctx context.Context, dgst digest.Digest, desc distribution.Descriptor) error {
