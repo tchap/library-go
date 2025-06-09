@@ -5,7 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/openshift/library-go/pkg/image/internal/digest"
+	"github.com/opencontainers/go-digest"
+
 	"github.com/openshift/library-go/pkg/image/internal/reference"
 )
 
@@ -170,7 +171,7 @@ func (r DockerImageReference) MostSpecific() DockerImageReference {
 	if len(r.ID) == 0 {
 		return r
 	}
-	if _, err := digest.ParseDigest(r.ID); err == nil {
+	if _, err := digest.Parse(r.ID); err == nil {
 		r.Tag = ""
 		return r
 	}
@@ -188,7 +189,7 @@ func (r DockerImageReference) NameString() string {
 		return ""
 	case len(r.ID) > 0:
 		var ref string
-		if _, err := digest.ParseDigest(r.ID); err == nil {
+		if _, err := digest.Parse(r.ID); err == nil {
 			// if it parses as a digest, its v2 pull by id
 			ref = "@" + r.ID
 		} else {

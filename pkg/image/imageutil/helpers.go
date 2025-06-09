@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"github.com/blang/semver/v4"
+	"github.com/opencontainers/go-digest"
 
 	"github.com/openshift/api/image/docker10"
 	imagev1 "github.com/openshift/api/image/v1"
-	digestinternal "github.com/openshift/library-go/pkg/image/internal/digest"
 	imagereference "github.com/openshift/library-go/pkg/image/reference"
 )
 
@@ -20,7 +20,7 @@ const (
 	DefaultImageTag = "latest"
 )
 
-var ParseDigest = digestinternal.ParseDigest
+var ParseDigest = digest.Parse
 
 // SplitImageStreamTag turns the name of an ImageStreamTag into Name and Tag.
 // It returns false if the tag was not properly specified in the name.
