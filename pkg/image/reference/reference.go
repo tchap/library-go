@@ -7,7 +7,7 @@ import (
 
 	"github.com/opencontainers/go-digest"
 
-	"github.com/openshift/library-go/pkg/image/internal/reference"
+	"github.com/openshift/library-go/pkg/image/reference/internal/reference"
 )
 
 // DockerImageReference points to a Docker image.
