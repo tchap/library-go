@@ -2,6 +2,7 @@ package certsyncpod
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,8 +18,8 @@ import (
 
 	"github.com/openshift/library-go/pkg/controller/factory"
 	"github.com/openshift/library-go/pkg/operator/events"
-	"github.com/openshift/library-go/pkg/operator/staticpod"
 	"github.com/openshift/library-go/pkg/operator/staticpod/controller/installer"
+	"github.com/openshift/library-go/pkg/operator/staticpod/internal/atomicdir"
 )
 
 type CertSyncController struct {
@@ -115,7 +116,7 @@ func (c *CertSyncController) sync(ctx context.Context, syncCtx factory.SyncConte
 
 		contentDir := getConfigMapDir(c.destinationDir, cm.Name)
 
-		data := map[string]string{}
+		data := make(map[string]string, len(configMap.Data))
 		for filename := range configMap.Data {
 			fullFilename := filepath.Join(contentDir, filename)
 
@@ -152,27 +153,11 @@ func (c *CertSyncController) sync(ctx context.Context, syncCtx factory.SyncConte
 			continue
 		}
 
-		klog.Infof("Creating directory %q ...", contentDir)
-		if err := os.MkdirAll(contentDir, 0755); err != nil && !os.IsExist(err) {
-			c.eventRecorder.Warningf("CertificateUpdateFailed", "Failed creating directory for configmap: %s/%s: %v", configMap.Namespace, configMap.Name, err)
-			errors = append(errors, err)
-			continue
+		files := make(map[string][]byte, len(configMap.Data))
+		for k, v := range configMap.Data {
+			files[k] = []byte(v)
 		}
-		for filename, content := range configMap.Data {
-			fullFilename := filepath.Join(contentDir, filename)
-			// if the existing is the same, do nothing
-			if reflect.DeepEqual(data[fullFilename], content) {
-				continue
-			}
-
-			klog.Infof("Writing configmap manifest %q ...", fullFilename)
-			if err := staticpod.WriteFileAtomic([]byte(content), 0644, fullFilename); err != nil {
-				c.eventRecorder.Warningf("CertificateUpdateFailed", "Failed writing file for configmap: %s/%s: %v", configMap.Namespace, configMap.Name, err)
-				errors = append(errors, err)
-				continue
-			}
-		}
-		c.eventRecorder.Eventf("CertificateUpdated", "Wrote updated configmap: %s/%s", configMap.Namespace, configMap.Name)
+		errors = append(errors, syncDirectory(c.eventRecorder, "configmap", configMap.ObjectMeta, contentDir, files, 0644))
 	}
 
 	klog.Infof("Syncing secrets: %v", c.secrets)
@@ -220,7 +205,7 @@ func (c *CertSyncController) sync(ctx context.Context, syncCtx factory.SyncConte
 
 		contentDir := getSecretDir(c.destinationDir, s.Name)
 
-		data := map[string][]byte{}
+		data := make(map[string][]byte, len(secret.Data))
 		for filename := range secret.Data {
 			fullFilename := filepath.Join(contentDir, filename)
 
@@ -257,29 +242,21 @@ func (c *CertSyncController) sync(ctx context.Context, syncCtx factory.SyncConte
 			continue
 		}
 
-		klog.Infof("Creating directory %q ...", contentDir)
-		if err := os.MkdirAll(contentDir, 0755); err != nil && !os.IsExist(err) {
-			c.eventRecorder.Warningf("CertificateUpdateFailed", "Failed creating directory for secret: %s/%s: %v", secret.Namespace, secret.Name, err)
-			errors = append(errors, err)
-			continue
-		}
-		for filename, content := range secret.Data {
-			// TODO fix permissions
-			fullFilename := filepath.Join(contentDir, filename)
-			// if the existing is the same, do nothing
-			if reflect.DeepEqual(data[fullFilename], content) {
-				continue
-			}
-
-			klog.Infof("Writing secret manifest %q ...", fullFilename)
-			if err := staticpod.WriteFileAtomic(content, 0600, fullFilename); err != nil {
-				c.eventRecorder.Warningf("CertificateUpdateFailed", "Failed writing file for secret: %s/%s: %v", secret.Namespace, secret.Name, err)
-				errors = append(errors, err)
-				continue
-			}
-		}
-		c.eventRecorder.Eventf("CertificateUpdated", "Wrote updated secret: %s/%s", secret.Namespace, secret.Name)
+		errors = append(errors, syncDirectory(c.eventRecorder, "secret", secret.ObjectMeta, contentDir, data, 0600))
 	}
-
 	return utilerrors.NewAggregate(errors)
+}
+
+func syncDirectory(
+	eventRecorder events.Recorder,
+	typeName string, o metav1.ObjectMeta,
+	targetDir string, files map[string][]byte, filePerm os.FileMode,
+) error {
+	if err := atomicdir.Sync(targetDir, files, filePerm); err != nil {
+		err = fmt.Errorf("failed to sync %s %s/%s (directory %q): %w", typeName, o.Name, o.Namespace, targetDir, err)
+		eventRecorder.Warning("CertificateUpdateFailed", err.Error())
+		return err
+	}
+	eventRecorder.Eventf("CertificateUpdated", "Wrote updated %s: %s/%s", typeName, o.Namespace, o.Name)
+	return nil
 }
