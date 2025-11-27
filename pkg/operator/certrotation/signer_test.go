@@ -2,75 +2,99 @@ package certrotation
 
 import (
 	"context"
-	clocktesting "k8s.io/utils/clock/testing"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/google/go-cmp/cmp"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/openshift/api/annotations"
 	"github.com/openshift/library-go/pkg/operator/events"
 )
 
 func TestEnsureSigningCertKeyPair(t *testing.T) {
+	newVerifyActionFunc := func(check func(t *testing.T, action clienttesting.Action)) func(t *testing.T, action clienttesting.Action) {
+		return func(t *testing.T, action clienttesting.Action) {
+			t.Helper()
+			check(t, action)
+
+			// We can use CreateAction for all cases as UpdateAction is the very same interface.
+			actual := action.(clienttesting.CreateAction).GetObject().(*corev1.Secret)
+			if certType, _ := CertificateTypeFromObject(actual); certType != CertificateTypeSigner {
+				t.Errorf("expected certificate type 'signer', got: %v", certType)
+			}
+			if len(actual.Data["tls.crt"]) == 0 || len(actual.Data["tls.key"]) == 0 {
+				t.Error(actual.Data)
+			}
+
+			expectedAnnotationKeys := sets.New[string](
+				"auth.openshift.io/certificate-not-after",
+				"auth.openshift.io/certificate-not-before",
+				"auth.openshift.io/certificate-issuer",
+				"certificates.openshift.io/refresh-period",
+				"openshift.io/owning-component",
+			)
+			if keys := sets.KeySet(actual.Annotations); !keys.Equal(expectedAnnotationKeys) {
+				t.Errorf("Annotation keys don't match:\n%s", cmp.Diff(expectedAnnotationKeys, keys))
+			}
+
+			ownershipValue, found := actual.Annotations[annotations.OpenShiftComponent]
+			if !found {
+				t.Errorf("expected secret to have ownership annotations, got: %v", actual.Annotations)
+			}
+			if ownershipValue != "test" {
+				t.Errorf("expected ownership annotation to be 'test', got: %v", ownershipValue)
+			}
+			if len(actual.OwnerReferences) != 1 {
+				t.Errorf("expected to have exactly one owner reference")
+			}
+			if actual.OwnerReferences[0].Name != "operator" {
+				t.Errorf("expected owner reference to be 'operator', got %v", actual.OwnerReferences[0].Name)
+			}
+		}
+	}
+
+	verifyActionOnCreated := newVerifyActionFunc(func(t *testing.T, action clienttesting.Action) {
+		t.Helper()
+		if !action.Matches("create", "secrets") {
+			t.Fatalf("Expected a Create action, got %s", spew.Sdump(action))
+		}
+	})
+
+	verifyActionOnUpdated := newVerifyActionFunc(func(t *testing.T, action clienttesting.Action) {
+		t.Helper()
+		if !action.Matches("update", "secrets") {
+			t.Fatalf("Expected an Update action, got %s", spew.Sdump(action))
+		}
+	})
+
 	tests := []struct {
 		name string
 
 		initialSecret          *corev1.Secret
 		RefreshOnlyWhenExpired bool
 
-		verifyActions func(t *testing.T, client *kubefake.Clientset, controllerUpdatedSecret bool)
-		expectedError string
+		verifyAction   func(t *testing.T, action clienttesting.Action)
+		expectedError  string
+		expectedEvents []*corev1.Event
 	}{
 		{
 			name:                   "initial create",
 			RefreshOnlyWhenExpired: false,
-			verifyActions: func(t *testing.T, client *kubefake.Clientset, controllerUpdatedSecret bool) {
-				t.Helper()
-				actions := client.Actions()
-				if len(actions) != 1 {
-					t.Fatal(spew.Sdump(actions))
-				}
-
-				if !controllerUpdatedSecret {
-					t.Errorf("expected controller to update secret")
-				}
-
-				if !actions[0].Matches("create", "secrets") {
-					t.Error(actions[0])
-				}
-
-				actual := actions[0].(clienttesting.CreateAction).GetObject().(*corev1.Secret)
-				if certType, _ := CertificateTypeFromObject(actual); certType != CertificateTypeSigner {
-					t.Errorf("expected certificate type 'signer', got: %v", certType)
-				}
-				if len(actual.Data["tls.crt"]) == 0 || len(actual.Data["tls.key"]) == 0 {
-					t.Error(actual.Data)
-				}
-				if len(actual.Annotations) == 0 {
-					t.Errorf("expected certificates to be annotated")
-				}
-				ownershipValue, found := actual.Annotations[annotations.OpenShiftComponent]
-				if !found {
-					t.Errorf("expected secret to have ownership annotations, got: %v", actual.Annotations)
-				}
-				if ownershipValue != "test" {
-					t.Errorf("expected ownership annotation to be 'test', got: %v", ownershipValue)
-				}
-				if len(actual.OwnerReferences) != 1 {
-					t.Errorf("expected to have exactly one owner reference")
-				}
-				if actual.OwnerReferences[0].Name != "operator" {
-					t.Errorf("expected owner reference to be 'operator', got %v", actual.OwnerReferences[0].Name)
-				}
+			verifyAction:           verifyActionOnCreated,
+			expectedEvents: []*corev1.Event{
+				{Reason: "SignerUpdateRequired", Message: `"signer" in "ns" requires a new signing cert/key pair: secret doesn't exist`},
+				{Reason: "SecretCreated", Message: `Created Secret/signer -n ns because it was missing`},
 			},
 		},
 		{
@@ -81,40 +105,48 @@ func TestEnsureSigningCertKeyPair(t *testing.T) {
 				Data:       map[string][]byte{"tls.crt": {}, "tls.key": {}},
 			},
 			RefreshOnlyWhenExpired: false,
-			verifyActions: func(t *testing.T, client *kubefake.Clientset, controllerUpdatedSecret bool) {
-				t.Helper()
-				actions := client.Actions()
-				if len(actions) != 1 {
-					t.Fatal(spew.Sdump(actions))
-				}
-
-				if !actions[0].Matches("update", "secrets") {
-					t.Error(actions[0])
-				}
-				if !controllerUpdatedSecret {
-					t.Errorf("expected controller to update secret")
-				}
-
-				actual := actions[0].(clienttesting.UpdateAction).GetObject().(*corev1.Secret)
-				if certType, _ := CertificateTypeFromObject(actual); certType != CertificateTypeSigner {
-					t.Errorf("expected certificate type 'signer', got: %v", certType)
-				}
-				if len(actual.Data["tls.crt"]) == 0 || len(actual.Data["tls.key"]) == 0 {
-					t.Error(actual.Data)
-				}
-				ownershipValue, found := actual.Annotations[annotations.OpenShiftComponent]
-				if !found {
-					t.Errorf("expected secret to have ownership annotations, got: %v", actual.Annotations)
-				}
-				if ownershipValue != "test" {
-					t.Errorf("expected ownership annotation to be 'test', got: %v", ownershipValue)
-				}
-				if len(actual.OwnerReferences) != 1 {
-					t.Errorf("expected to have exactly one owner reference")
-				}
-				if actual.OwnerReferences[0].Name != "operator" {
-					t.Errorf("expected owner reference to be 'operator', got %v", actual.OwnerReferences[0].Name)
-				}
+			verifyAction:           verifyActionOnUpdated,
+			expectedEvents: []*corev1.Event{
+				{Reason: "SignerUpdateRequired", Message: `"signer" in "ns" requires a new signing cert/key pair: missing notAfter`},
+				{Reason: "SecretUpdated", Message: `Updated Secret/signer -n ns because it changed`},
+			},
+		},
+		{
+			name: "update on missing notAfter annotation",
+			initialSecret: &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "signer", ResourceVersion: "10",
+					Annotations: map[string]string{
+						"auth.openshift.io/certificate-not-before": "2108-09-08T20:47:31-07:00",
+						annotations.OpenShiftComponent:             "test",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+				Data: map[string][]byte{"tls.crt": {}, "tls.key": {}},
+			},
+			RefreshOnlyWhenExpired: false,
+			verifyAction:           verifyActionOnUpdated,
+			expectedEvents: []*corev1.Event{
+				{Reason: "SignerUpdateRequired", Message: `"signer" in "ns" requires a new signing cert/key pair: missing notAfter`},
+				{Reason: "SecretUpdated", Message: `Updated Secret/signer -n ns because it changed`},
+			},
+		},
+		{
+			name: "update on missing notBefore annotation",
+			initialSecret: &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "signer", ResourceVersion: "10",
+					Annotations: map[string]string{
+						"auth.openshift.io/certificate-not-after": "2108-09-08T22:47:31-07:00",
+						annotations.OpenShiftComponent:            "test",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+				Data: map[string][]byte{"tls.crt": {}, "tls.key": {}},
+			},
+			RefreshOnlyWhenExpired: false,
+			verifyAction:           verifyActionOnUpdated,
+			expectedEvents: []*corev1.Event{
+				{Reason: "SignerUpdateRequired", Message: `"signer" in "ns" requires a new signing cert/key pair: missing notBefore`},
+				{Reason: "SecretUpdated", Message: `Updated Secret/signer -n ns because it changed`},
 			},
 		},
 		{
@@ -135,14 +167,7 @@ func TestEnsureSigningCertKeyPair(t *testing.T) {
 				Data: map[string][]byte{"tls.crt": {}, "tls.key": {}},
 			},
 			RefreshOnlyWhenExpired: false,
-			verifyActions: func(t *testing.T, client *kubefake.Clientset, controllerUpdatedSecret bool) {
-				t.Helper()
-				actions := client.Actions()
-				if len(actions) != 0 {
-					t.Fatal(spew.Sdump(actions))
-				}
-			},
-			expectedError: "certFile missing", // this means we tried to read the cert from the existing secret.  If we created one, we fail in the client check
+			expectedError:          "certFile missing", // this means we tried to read the cert from the existing secret.  If we created one, we fail in the client check
 		},
 		{
 			name: "update with RefreshOnlyWhenExpired set",
@@ -160,14 +185,7 @@ func TestEnsureSigningCertKeyPair(t *testing.T) {
 				Data: map[string][]byte{"tls.crt": {}, "tls.key": {}},
 			},
 			RefreshOnlyWhenExpired: true,
-			verifyActions: func(t *testing.T, client *kubefake.Clientset, controllerUpdatedSecret bool) {
-				t.Helper()
-				actions := client.Actions()
-				if len(actions) != 0 {
-					t.Fatal(spew.Sdump(actions))
-				}
-			},
-			expectedError: "certFile missing", // this means we tried to read the cert from the existing secret.  If we created one, we fail in the client check
+			expectedError:          "certFile missing", // this means we tried to read the cert from the existing secret.  If we created one, we fail in the client check
 		},
 	}
 
@@ -175,11 +193,13 @@ func TestEnsureSigningCertKeyPair(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
 
-			client := kubefake.NewSimpleClientset()
+			client := kubefake.NewClientset()
 			if test.initialSecret != nil {
 				indexer.Add(test.initialSecret)
-				client = kubefake.NewSimpleClientset(test.initialSecret)
+				client = kubefake.NewClientset(test.initialSecret)
 			}
+
+			recorder := events.NewInMemoryRecorder("test", clocktesting.NewFakePassiveClock(time.Now()))
 
 			c := &RotatedSigningCASecret{
 				Namespace:     "ns",
@@ -188,7 +208,7 @@ func TestEnsureSigningCertKeyPair(t *testing.T) {
 				Refresh:       12 * time.Hour,
 				Client:        client.CoreV1(),
 				Lister:        corev1listers.NewSecretLister(indexer),
-				EventRecorder: events.NewInMemoryRecorder("test", clocktesting.NewFakePassiveClock(time.Now())),
+				EventRecorder: recorder,
 				AdditionalAnnotations: AdditionalAnnotations{
 					JiraComponent: "test",
 				},
@@ -208,7 +228,41 @@ func TestEnsureSigningCertKeyPair(t *testing.T) {
 				t.Errorf("missing %q", test.expectedError)
 			}
 
-			test.verifyActions(t, client, updated)
+			actions := client.Actions()
+			if test.verifyAction == nil {
+				if len(actions) > 0 {
+					t.Fatalf("Expected no action, got %d:\n%s", len(actions), spew.Sdump(actions))
+				}
+			} else {
+				if !updated {
+					t.Errorf("Expected controller to update secret")
+				}
+
+				if len(actions) > 1 {
+					t.Fatalf("Expected 1 action, got %d:\n%s", len(actions), spew.Sdump(actions))
+				} else {
+					test.verifyAction(t, actions[0])
+				}
+			}
+
+			if events := pruneEventFieldsForComparison(recorder.Events()); !cmp.Equal(events, test.expectedEvents) {
+				t.Errorf("Events mismatch (-want +got):\n%s", cmp.Diff(test.expectedEvents, events))
+			}
 		})
 	}
+}
+
+func pruneEventFieldsForComparison(events []*corev1.Event) []*corev1.Event {
+	if len(events) == 0 {
+		return nil
+	}
+
+	out := make([]*corev1.Event, len(events))
+	for i, event := range events {
+		out[i] = &corev1.Event{
+			Reason:  event.Reason,
+			Message: event.Message,
+		}
+	}
+	return out
 }
