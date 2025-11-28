@@ -676,6 +676,10 @@ func makeSelfSignedCAConfigForSubjectAndDuration(subject pkix.Name, currentTime 
 }
 
 func MakeCAConfigForDuration(name string, caLifetime time.Duration, issuer *CA) (*TLSCertificateConfig, error) {
+	return MakeCAConfigForDurationAtTime(name, time.Now, caLifetime, issuer)
+}
+
+func MakeCAConfigForDurationAtTime(name string, currentTime func() time.Time, caLifetime time.Duration, issuer *CA) (*TLSCertificateConfig, error) {
 	// Create CA cert
 	signerPublicKey, signerPrivateKey, publicKeyHash, err := newKeyPairWithHash()
 	if err != nil {
@@ -683,7 +687,7 @@ func MakeCAConfigForDuration(name string, caLifetime time.Duration, issuer *CA) 
 	}
 	authorityKeyId := issuer.Config.Certs[0].SubjectKeyId
 	subjectKeyId := publicKeyHash
-	signerTemplate := newSigningCertificateTemplateForDuration(pkix.Name{CommonName: name}, caLifetime, time.Now, authorityKeyId, subjectKeyId)
+	signerTemplate := newSigningCertificateTemplateForDuration(pkix.Name{CommonName: name}, caLifetime, currentTime, authorityKeyId, subjectKeyId)
 	signerCert, err := issuer.SignCertificate(signerTemplate, signerPublicKey)
 	if err != nil {
 		return nil, err

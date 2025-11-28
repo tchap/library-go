@@ -58,6 +58,10 @@ type RotatedSigningCASecret struct {
 // EnsureSigningCertKeyPair manages the entire lifecycle of a signer cert as a secret, from creation to continued rotation.
 // It always returns the currently used CA pair, a bool indicating whether it was created/updated within this function call and an error.
 func (c RotatedSigningCASecret) EnsureSigningCertKeyPair(ctx context.Context) (*crypto.CA, bool, error) {
+	return c.ensureSigningCertKeyPair(ctx, time.Now())
+}
+
+func (c RotatedSigningCASecret) ensureSigningCertKeyPair(ctx context.Context, now time.Time) (*crypto.CA, bool, error) {
 	creationRequired := false
 	updateRequired := false
 	originalSigningCertKeyPairSecret, err := c.Lister.Secrets(c.Namespace).Get(c.Name)
@@ -87,12 +91,12 @@ func (c RotatedSigningCASecret) EnsureSigningCertKeyPair(ctx context.Context) (*
 
 	// run Update if signer content needs changing
 	signerUpdated := false
-	if needed, reason := needNewSigningCertKeyPair(signingCertKeyPairSecret, c.Refresh, c.RefreshOnlyWhenExpired); needed || creationRequired {
+	if needed, reason := needNewSigningCertKeyPair(signingCertKeyPairSecret, now, c.Refresh, c.RefreshOnlyWhenExpired); needed || creationRequired {
 		if creationRequired {
 			reason = "secret doesn't exist"
 		}
 		c.EventRecorder.Eventf("SignerUpdateRequired", "%q in %q requires a new signing cert/key pair: %v", c.Name, c.Namespace, reason)
-		if err = setSigningCertKeyPairSecretAndTLSAnnotations(signingCertKeyPairSecret, c.Validity, c.Refresh, c.AdditionalAnnotations); err != nil {
+		if err = setSigningCertKeyPairSecretAndTLSAnnotations(signingCertKeyPairSecret, now, c.Validity, c.Refresh, c.AdditionalAnnotations); err != nil {
 			return nil, false, err
 		}
 
@@ -149,14 +153,14 @@ func ensureOwnerReference(meta *metav1.ObjectMeta, owner *metav1.OwnerReference)
 	return false
 }
 
-func needNewSigningCertKeyPair(secret *corev1.Secret, refresh time.Duration, refreshOnlyWhenExpired bool) (bool, string) {
+func needNewSigningCertKeyPair(secret *corev1.Secret, now time.Time, refresh time.Duration, refreshOnlyWhenExpired bool) (bool, string) {
 	annotations := secret.Annotations
 	notBefore, notAfter, reason := getValidityFromAnnotations(annotations)
 	if len(reason) > 0 {
 		return true, reason
 	}
 
-	if time.Now().After(notAfter) {
+	if now.After(notAfter) {
 		return true, "already expired"
 	}
 
@@ -166,12 +170,12 @@ func needNewSigningCertKeyPair(secret *corev1.Secret, refresh time.Duration, ref
 
 	validity := notAfter.Sub(notBefore)
 	at80Percent := notAfter.Add(-validity / 5)
-	if time.Now().After(at80Percent) {
+	if now.After(at80Percent) {
 		return true, fmt.Sprintf("past refresh time (80%% of validity): %v", at80Percent)
 	}
 
 	developerSpecifiedRefresh := notBefore.Add(refresh)
-	if time.Now().After(developerSpecifiedRefresh) {
+	if now.After(developerSpecifiedRefresh) {
 		return true, fmt.Sprintf("past its refresh time %v", developerSpecifiedRefresh)
 	}
 
@@ -201,8 +205,8 @@ func getValidityFromAnnotations(annotations map[string]string) (notBefore time.T
 
 // setSigningCertKeyPairSecretAndTLSAnnotations generates a new signing certificate and key pair,
 // stores them in the specified secret, and adds predefined TLS annotations to that secret.
-func setSigningCertKeyPairSecretAndTLSAnnotations(signingCertKeyPairSecret *corev1.Secret, validity, refresh time.Duration, tlsAnnotations AdditionalAnnotations) error {
-	ca, err := setSigningCertKeyPairSecret(signingCertKeyPairSecret, validity)
+func setSigningCertKeyPairSecretAndTLSAnnotations(signingCertKeyPairSecret *corev1.Secret, now time.Time, validity, refresh time.Duration, tlsAnnotations AdditionalAnnotations) error {
+	ca, err := setSigningCertKeyPairSecret(signingCertKeyPairSecret, now, validity)
 	if err != nil {
 		return err
 	}
@@ -212,9 +216,9 @@ func setSigningCertKeyPairSecretAndTLSAnnotations(signingCertKeyPairSecret *core
 }
 
 // setSigningCertKeyPairSecret creates a new signing cert/key pair and sets them in the secret
-func setSigningCertKeyPairSecret(signingCertKeyPairSecret *corev1.Secret, validity time.Duration) (*crypto.TLSCertificateConfig, error) {
-	signerName := fmt.Sprintf("%s_%s@%d", signingCertKeyPairSecret.Namespace, signingCertKeyPairSecret.Name, time.Now().Unix())
-	ca, err := crypto.MakeSelfSignedCAConfigForDuration(signerName, validity)
+func setSigningCertKeyPairSecret(signingCertKeyPairSecret *corev1.Secret, now time.Time, validity time.Duration) (*crypto.TLSCertificateConfig, error) {
+	signerName := fmt.Sprintf("%s_%s@%d", signingCertKeyPairSecret.Namespace, signingCertKeyPairSecret.Name, now.Unix())
+	ca, err := crypto.UnsafeMakeSelfSignedCAConfigForDurationAtTime(signerName, func() time.Time { return now }, validity)
 	if err != nil {
 		return nil, err
 	}
