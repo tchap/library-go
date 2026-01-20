@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/informers"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 
 	"github.com/openshift/library-go/pkg/controller/factory"
 	"github.com/openshift/library-go/pkg/operator/condition"
@@ -33,6 +34,7 @@ type StaticPodStateController struct {
 
 	operatorClient  v1helpers.StaticPodOperatorClient
 	podsGetter      corev1client.PodsGetter
+	nodeLister      corev1listers.NodeLister
 	versionRecorder status.VersionGetter
 }
 
@@ -41,6 +43,7 @@ type StaticPodStateController struct {
 func NewStaticPodStateController(
 	instanceName, targetNamespace, staticPodName, operandName string,
 	kubeInformersForTargetNamespace informers.SharedInformerFactory,
+	kubeInformersClusterScoped informers.SharedInformerFactory,
 	operatorClient v1helpers.StaticPodOperatorClient,
 	podsGetter corev1client.PodsGetter,
 	versionRecorder status.VersionGetter,
@@ -53,6 +56,7 @@ func NewStaticPodStateController(
 		operandName:            operandName,
 		operatorClient:         operatorClient,
 		podsGetter:             podsGetter,
+		nodeLister:             kubeInformersClusterScoped.Core().V1().Nodes().Lister(),
 		versionRecorder:        versionRecorder,
 	}
 	return factory.New().
