@@ -303,20 +303,38 @@ func (c *Controller) updateOperatorStatus(ctx context.Context, previousStatus *o
 		desiredReplicas = *(workload.Spec.Replicas)
 	}
 
+	markProgressAsScaling := func() {
+		deploymentProgressingCondition = deploymentProgressingCondition.
+			WithStatus(operatorv1.ConditionFalse).
+			WithReason("Scaling").
+			WithMessage(fmt.Sprintf("deployment/%s.%s: scaling replicas from %d to %d.", workload.Name, c.targetNamespace, workload.Status.UpdatedReplicas, desiredReplicas))
+	}
+
 	// If the workload is up to date, then we are no longer progressing
 	workloadAtHighestGeneration := workload.ObjectMeta.Generation == workload.Status.ObservedGeneration
-	workloadIsScaling := workload.Status.UpdatedReplicas == workload.Status.Replicas
 	switch {
-	case !workloadAtHighestGeneration && !workloadIsScaling:
-		deploymentProgressingCondition = deploymentProgressingCondition.
-			WithStatus(operatorv1.ConditionTrue).
-			WithReason("NewGeneration").
-			WithMessage(fmt.Sprintf("deployment/%s.%s: observed generation is %d, desired generation is %d.", workload.Name, c.targetNamespace, workload.Status.ObservedGeneration, workload.ObjectMeta.Generation))
-	case !hasDeploymentProgressed(workload.Status) && !workloadIsScaling:
-		deploymentProgressingCondition = deploymentProgressingCondition.
-			WithStatus(operatorv1.ConditionTrue).
-			WithReason("PodsUpdating").
-			WithMessage(fmt.Sprintf("deployment/%s.%s: %d/%d pods have been updated to the latest generation and %d/%d pods are available", workload.Name, c.targetNamespace, workload.Status.UpdatedReplicas, desiredReplicas, workload.Status.AvailableReplicas, desiredReplicas))
+	case !workloadAtHighestGeneration:
+		// We have to handle scaling optimistically since the deployment hasn't been processed yet.
+		// So in case there is a change in replicas, we simply treat it as scaling,
+		// although the template might have also changed.
+		if isDeploymentScaling(workload.Status, desiredReplicas) {
+			markProgressAsScaling()
+		} else {
+			deploymentProgressingCondition = deploymentProgressingCondition.
+				WithStatus(operatorv1.ConditionTrue).
+				WithReason("NewGeneration").
+				WithMessage(fmt.Sprintf("deployment/%s.%s: observed generation is %d, desired generation is %d.", workload.Name, c.targetNamespace, workload.Status.ObservedGeneration, workload.ObjectMeta.Generation))
+		}
+	case !hasDeploymentProgressed(workload.Status):
+		// Scaling doesn't count as Progressing.
+		if isDeploymentScaling(workload.Status, desiredReplicas) {
+			markProgressAsScaling()
+		} else {
+			deploymentProgressingCondition = deploymentProgressingCondition.
+				WithStatus(operatorv1.ConditionTrue).
+				WithReason("PodsUpdating").
+				WithMessage(fmt.Sprintf("deployment/%s.%s: %d/%d pods have been updated to the latest generation and %d/%d pods are available", workload.Name, c.targetNamespace, workload.Status.UpdatedReplicas, desiredReplicas, workload.Status.AvailableReplicas, desiredReplicas))
+		}
 	default:
 		// Terminating pods don't account for any of the other status fields but
 		// still can exist in a state when they are accepting connections and would
@@ -440,6 +458,10 @@ func EnsureAtMostOnePodPerNode(spec *appsv1.DeploymentSpec, component string) er
 	}
 
 	return nil
+}
+
+func isDeploymentScaling(status appsv1.DeploymentStatus, desiredReplicas int32) bool {
+	return status.UpdatedReplicas == status.Replicas && desiredReplicas != status.UpdatedReplicas
 }
 
 // CountNodesFuncWrapper returns a function that returns the number of nodes that match the given
