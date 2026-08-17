@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -217,6 +217,15 @@ func (c *Controller) updateOperatorStatus(ctx context.Context, previousStatus *o
 		}
 	}()
 
+	defer func() {
+		if len(errs) > 0 {
+			workloadDegradedCondition = workloadDegradedCondition.
+				WithStatus(operatorv1.ConditionTrue).
+				WithReason("SyncError").
+				WithMessage(errMessage(errs))
+		}
+	}()
+
 	if !preconditionsReady {
 		var message string
 		if err := errors.Join(errs...); err != nil {
@@ -249,25 +258,6 @@ func (c *Controller) updateOperatorStatus(ctx context.Context, previousStatus *o
 		return kerrors.NewAggregate(errs)
 	}
 
-	if len(errs) > 0 {
-		var message string
-		if err := errors.Join(errs...); err != nil {
-			message = err.Error()
-		}
-		workloadDegradedCondition = workloadDegradedCondition.
-			WithStatus(operatorv1.ConditionTrue).
-			WithReason("SyncError").
-			WithMessage(message)
-	} else if workload == nil {
-		workloadDegradedCondition = workloadDegradedCondition.
-			WithStatus(operatorv1.ConditionTrue).
-			WithReason("NoDeployment").
-			WithMessage(fmt.Sprintf("deployment/%s: could not be retrieved", c.targetNamespace))
-	} else {
-		workloadDegradedCondition = workloadDegradedCondition.
-			WithStatus(operatorv1.ConditionFalse)
-	}
-
 	if workload == nil {
 		message := fmt.Sprintf("deployment/%s: could not be retrieved", c.targetNamespace)
 		deploymentAvailableCondition = deploymentAvailableCondition.
@@ -285,14 +275,21 @@ func (c *Controller) updateOperatorStatus(ctx context.Context, previousStatus *o
 			WithReason("NoDeployment").
 			WithMessage(message)
 
+		workloadDegradedCondition = workloadDegradedCondition.
+			WithStatus(operatorv1.ConditionTrue).
+			WithReason("NoDeployment").
+			WithMessage(message)
+
 		return kerrors.NewAggregate(errs)
 	}
+
+	workloadDegradedCondition = workloadDegradedCondition.WithStatus(operatorv1.ConditionFalse)
 
 	if workload.Status.AvailableReplicas == 0 {
 		deploymentAvailableCondition = deploymentAvailableCondition.
 			WithStatus(operatorv1.ConditionFalse).
 			WithReason("NoPod").
-			WithMessage(fmt.Sprintf("no %s.%s pods available on any node.", workload.Name, c.targetNamespace))
+			WithMessage(fmt.Sprintf("no %s.%s pods available on any node", workload.Name, c.targetNamespace))
 	} else {
 		deploymentAvailableCondition = deploymentAvailableCondition.
 			WithStatus(operatorv1.ConditionTrue).
@@ -305,31 +302,20 @@ func (c *Controller) updateOperatorStatus(ctx context.Context, previousStatus *o
 		WithReason(progressingCond.Reason).
 		WithMessage(progressingCond.Message)
 
+	degradedCond, degradedErr := deployment.DeploymentDegradedCondition(workload, c.podsLister, time.Now())
+	if degradedErr != nil {
+		errs = append(errs, degradedErr)
+	}
+	deploymentDegradedCondition = deploymentDegradedCondition.
+		WithStatus(degradedCond.Status).
+		WithReason(degradedCond.Reason).
+		WithMessage(degradedCond.Message)
+
 	// During a rollout the default maxSurge (25%) will allow the available
 	// replicas to temporarily exceed the desired replica count. If this were
 	// to occur, the operator should not report degraded.
-	_, workloadIsBeingUpdatedTooLong := deployment.HasDeploymentTimedOutProgressing(workload.Status)
-	workloadIsBeingUpdated := !deployment.HasDeploymentProgressed(workload.Status) && !workloadIsBeingUpdatedTooLong
-
 	desiredReplicas := ptr.Deref(workload.Spec.Replicas, 1)
 	workloadHasAllPodsAvailable := workload.Status.AvailableReplicas >= desiredReplicas
-
-	if !workloadHasAllPodsAvailable && !workloadIsBeingUpdated {
-		numNonAvailablePods := desiredReplicas - workload.Status.AvailableReplicas
-		deploymentDegradedCondition = deploymentDegradedCondition.
-			WithStatus(operatorv1.ConditionTrue).
-			WithReason("UnavailablePod")
-		podContainersStatus, err := deployment.PodContainersStatus(workload, c.podsLister)
-		if err != nil {
-			podContainersStatus = []string{fmt.Sprintf("failed to get pod containers details: %v", err)}
-		}
-		deploymentDegradedCondition = deploymentDegradedCondition.
-			WithMessage(fmt.Sprintf("%v of %v requested instances are unavailable for %s.%s (%s)", numNonAvailablePods, desiredReplicas, workload.Name, c.targetNamespace, strings.Join(podContainersStatus, ", ")))
-	} else {
-		deploymentDegradedCondition = deploymentDegradedCondition.
-			WithStatus(operatorv1.ConditionFalse).
-			WithReason("AsExpected")
-	}
 
 	// if the deployment is all available and at the expected generation, then update the version to the latest
 	// when we update, the image pull spec should immediately be different, which should immediately cause a deployment rollout
@@ -352,6 +338,13 @@ func (c *Controller) constructOperandNameFor(name string) string {
 	}
 
 	return name
+}
+
+func errMessage(errs []error) string {
+	if err := errors.Join(errs...); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // EnsureAtMostOnePodPerNode updates the deployment spec to prevent more than
