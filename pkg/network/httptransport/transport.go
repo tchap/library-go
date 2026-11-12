@@ -21,6 +21,7 @@ type Option func(*Config) error
 // Config holds the transport config. It's public so that library users can create their own Option,
 // e.g. load CA from a ConfigMap and return WithCAData.
 type Config struct {
+	basePoolSet        bool
 	basePool           *x509.CertPool
 	staticCAs          [][]*x509.Certificate
 	caContentProviders []dynamiccertificates.CAContentProvider
@@ -32,9 +33,10 @@ type Config struct {
 	tlsCipherSuites    []uint16
 }
 
-// WithCAContentProvider adds a CA content provider to the transport's trust pool.
-// The transport registers for provider notifications and rebuilds itself
-// when the provider reports a change. It may be supplied multiple times.
+// WithCAContentProvider adds a CA content provider to the transport's trust
+// pool. The transport registers for provider notifications and rebuilds itself
+// when the provider reports a change. It may be supplied multiple times; every
+// provider's current bundle is added to the pool.
 func WithCAContentProvider(provider dynamiccertificates.CAContentProvider) Option {
 	return func(config *Config) error {
 		config.caContentProviders = append(config.caContentProviders, provider)
@@ -42,8 +44,9 @@ func WithCAContentProvider(provider dynamiccertificates.CAContentProvider) Optio
 	}
 }
 
-// WithCAData adds certificates from PEM-encoded data to the transport's trust pool.
-// Empty data is ignored. It may be supplied multiple times.
+// WithCAData adds certificates from PEM-encoded data to the transport's trust
+// pool. Empty data is ignored. The name identifies the source in errors. It may
+// be supplied multiple times; certificates are added to the pool.
 func WithCAData(name string, pemData []byte) Option {
 	return func(config *Config) error {
 		if len(pemData) == 0 {
@@ -59,10 +62,10 @@ func WithCAData(name string, pemData []byte) Option {
 	}
 }
 
-// WithCAFile adds certificates from a PEM-encoded file to the transport's trust pool.
-// An empty path is ignored. It may be supplied multiple times.
-//
-// The file is read only during transport construction; use WithCAContentProvider for dynamically reloaded content.
+// WithCAFile adds certificates from a PEM-encoded file to the transport's
+// trust pool. An empty path is ignored. The file is read only during transport
+// construction; use WithCAContentProvider for dynamically reloaded content. It
+// may be supplied multiple times; certificates are added to the pool.
 func WithCAFile(name, path string) Option {
 	return func(config *Config) error {
 		if len(path) == 0 {
@@ -78,21 +81,26 @@ func WithCAFile(name, path string) Option {
 	}
 }
 
-// WithCertPool uses a snapshot of pool as the base trust pool instead of the system certificate pool.
-// A nil pool retains the default system trust pool. It may be supplied multiple times; the last one wins.
+// WithCertPool uses a snapshot of pool as the base trust pool instead of the
+// system certificate pool. A nil pool retains the default system trust pool.
+// At most one WithCertPool option may be supplied.
 func WithCertPool(pool *x509.CertPool) Option {
 	return func(config *Config) error {
+		if config.basePoolSet {
+			return errors.New("WithCertPool may only be specified once")
+		}
+		config.basePoolSet = true
 		if pool != nil {
 			config.basePool = pool.Clone()
-		} else {
-			config.basePool = nil
 		}
 		return nil
 	}
 }
 
-// WithClientCertificateFile configures a client certificate from a PEM-encoded certificate file and private key file.
-// The files are read only during transport construction. This option may be supplied multiple times.
+// WithClientCertificateFile configures a client certificate from a PEM-encoded
+// certificate file and private key file. Both paths must be supplied together.
+// The files are read only during transport construction. This option may be
+// supplied multiple times; certificates retain option order.
 func WithClientCertificateFile(certFile, keyFile string) Option {
 	return func(config *Config) error {
 		if (len(certFile) == 0) != (len(keyFile) == 0) {
@@ -111,9 +119,9 @@ func WithClientCertificateFile(certFile, keyFile string) Option {
 	}
 }
 
-// WithProxyFunc configures proxy resolution. A nil function disables proxying altogether.
-// If this option is omitted, the transport uses the standard proxy environment variables.
-// It may be supplied multiple times; the last one wins.
+// WithProxyFunc explicitly configures proxy resolution. A nil function
+// disables proxying altogether. If this option is omitted, the transport uses the standard
+// proxy environment variables. It may be supplied multiple times; the last one wins.
 func WithProxyFunc(proxyFunc func(*http.Request) (*url.URL, error)) Option {
 	return func(config *Config) error {
 		config.proxyConfigured = true
@@ -159,6 +167,17 @@ func WithDisabledHTTP2() Option {
 // standard proxy environment variables, and applies the OpenShift-wide TLS
 // defaults (minimum version and cipher suites) from pkg/crypto.DefaultTLSVersion
 // and pkg/crypto.DefaultCiphers.
+//
+// The concrete type of the returned http.RoundTripper is not part of the API.
+// When no CA content provider is supplied it is a static *http.Transport; when
+// one or more providers are supplied it is a wrapper that atomically rebuilds
+// the underlying transport whenever a provider reports a change. The wrapper
+// forwards CloseIdleConnections, so http.Client.CloseIdleConnections works in
+// either case.
+//
+// Callers own the lifecycle of supplied CA content providers and must register
+// all transports (by constructing them) before starting the dynamic providers,
+// so no change notification is missed between construction and registration.
 func NewRoundTripper(opts ...Option) (http.RoundTripper, error) {
 	var config Config
 	for i, option := range opts {
@@ -167,22 +186,21 @@ func NewRoundTripper(opts ...Option) (http.RoundTripper, error) {
 		}
 	}
 
-	if len(config.caContentProviders) == 0 {
-		return config.newHTTPTransport()
-	}
-
-	roundTripper := &dynamicTransport{config: &config}
-	for _, provider := range config.caContentProviders {
-		provider.AddListener(roundTripper)
-	}
-
-	// Transport must be built after the providers are registered,
-	// otherwise we can potentially lose some change events.
 	transport, err := config.newHTTPTransport()
 	if err != nil {
 		return nil, err
 	}
+	if len(config.caContentProviders) == 0 {
+		return transport, nil
+	}
+
+	roundTripper := &dynamicTransport{config: &config}
 	roundTripper.transport.Store(transport)
+
+	for _, provider := range config.caContentProviders {
+		provider.AddListener(roundTripper)
+	}
+
 	return roundTripper, nil
 }
 

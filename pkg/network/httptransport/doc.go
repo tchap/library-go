@@ -1,4 +1,6 @@
-// Package httptransport contains a builder that can be used to build an http.RoundTripper.
-// Particularly the package supports registering dynamic CA bundle sources that are being watched
-// and any change causes the RoundTripper to be rebuilt in the background and atomically replaced.
+// Package httptransport builds outbound HTTP round trippers.
+//
+// Deprecated: use pkg/network/dynamictransport, which follows CA content
+// providers with a workqueue-based rebuild loop and a context-scoped
+// lifecycle. This package is frozen; its behavior will not change.
 package httptransport
